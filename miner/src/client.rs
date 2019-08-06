@@ -1,13 +1,11 @@
-use crate::{ClientConfig, Work};
+use crate::{MinerConfig, Work};
 use ckb_core::block::Block;
 use ckb_jsonrpc_types::{
     error::Error as RpcFail, error::ErrorCode as RpcFailCode, id::Id, params::Params,
     request::MethodCall, response::Output, version::Version, Block as JsonBlock, BlockTemplate,
 };
-use ckb_logger::{debug, error, warn};
+use ckb_logger::{error, warn};
 use ckb_stop_handler::{SignalSender, StopHandler};
-use crossbeam_channel::Sender;
-use failure::Error;
 use futures::sync::{mpsc, oneshot};
 use hyper::error::Error as HyperError;
 use hyper::header::{HeaderValue, CONTENT_TYPE};
@@ -19,7 +17,6 @@ use serde_json::error::Error as JsonError;
 use serde_json::{self, json, Value};
 use std::convert::Into;
 use std::thread;
-use std::time;
 
 type RpcRequest = (oneshot::Sender<Result<Chunk, RpcError>>, MethodCall);
 
@@ -106,19 +103,17 @@ impl Drop for Rpc {
 #[derive(Debug, Clone)]
 pub struct Client {
     pub current_work_id: Option<u64>,
-    pub new_work_tx: Sender<Work>,
-    pub config: ClientConfig,
+    pub config: MinerConfig,
     pub rpc: Rpc,
 }
 
 impl Client {
-    pub fn new(new_work_tx: Sender<Work>, config: ClientConfig) -> Client {
+    pub fn new(config: MinerConfig) -> Client {
         let uri: Uri = config.rpc_url.parse().expect("valid rpc url");
 
         Client {
             current_work_id: None,
             rpc: Rpc::new(uri),
-            new_work_tx,
             config,
         }
     }
@@ -155,22 +150,14 @@ impl Client {
         }
     }
 
-    pub fn poll_block_template(&mut self) {
-        loop {
-            debug!("poll block template...");
-            self.try_update_block_template();
-            thread::sleep(time::Duration::from_millis(self.config.poll_interval));
-        }
-    }
-
-    pub fn try_update_block_template(&mut self) {
+    pub fn poll_new_work(&mut self) -> Option<Work> {
         match self.get_block_template().wait() {
             Ok(block_template) => {
                 if self.current_work_id != Some(block_template.work_id.0) {
                     self.current_work_id = Some(block_template.work_id.0);
-                    if let Err(e) = self.notify_new_work(block_template) {
-                        error!("notify_new_block error: {:?}", e);
-                    }
+                    Some(block_template.into())
+                } else {
+                    None
                 }
             }
             Err(ref err) => {
@@ -190,6 +177,8 @@ impl Client {
                 } else {
                     error!("rpc call get_block_template error: {:?}", err);
                 }
+
+                None
             }
         }
     }
@@ -199,12 +188,6 @@ impl Client {
         let params = vec![];
 
         self.rpc.request(method, params).and_then(parse_response)
-    }
-
-    fn notify_new_work(&self, block_template: BlockTemplate) -> Result<(), Error> {
-        let work: Work = block_template.into();
-        self.new_work_tx.send(work)?;
-        Ok(())
     }
 }
 

@@ -1,26 +1,21 @@
-mod cuckoo_simple;
+mod cuckoo;
 
-use crate::config::WorkerConfig;
 use ckb_core::header::Seal;
 use ckb_logger::error;
 use crossbeam_channel::{unbounded, Sender};
-use cuckoo_simple::CuckooSimple;
+use cuckoo::CuckooGpu;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use numext_fixed_hash::H256;
-use rand::Rng;
-use std::ops::Range;
 use std::thread;
-
-pub const CYCLE_LEN: usize = 12;
-pub const EDGE_BITS: usize = 15;
 
 #[derive(Clone)]
 pub enum WorkerMessage {
     Stop,
     Start,
-    NewWork(H256),
+    NewWork((H256, H256)),
 }
 
+#[derive(Clone)]
 pub struct WorkerController {
     inner: Vec<Sender<WorkerMessage>>,
 }
@@ -39,33 +34,16 @@ impl WorkerController {
     }
 }
 
-fn partition_nonce(id: u64, total: u64) -> Range<u64> {
-    let span = u64::max_value() / total;
-    let start = span * id;
-    let end = match id {
-        x if x < total - 1 => start + span,
-        x if x == total - 1 => u64::max_value(),
-        _ => unreachable!(),
-    };
-    Range { start, end }
-}
-
-fn nonce_generator(range: Range<u64>) -> impl FnMut() -> u64 {
-    let mut rng = rand::thread_rng();
-    let Range { start, end } = range;
-    move || rng.gen_range(start, end)
-}
-
 const PROGRESS_BAR_TEMPLATE: &str = "{prefix:.bold.dim} {spinner:.green} [{elapsed_precise}] {msg}";
 
 pub fn start_worker(
-    config: &WorkerConfig,
+    _threads: usize,
     seal_tx: Sender<(H256, Seal)>,
     mp: &MultiProgress,
 ) -> WorkerController {
-    let worker_txs = (0..config.threads).map(|i| {
-            let worker_name = format!("CuckooSimple-Worker-{}", i);
-            let nonce_range = partition_nonce(i as u64, config.threads as u64);
+    let worker_txs = (0..1)
+        .map(|i| {
+            let worker_name = format!("CuckooGpu-Worker-{}", i);
             // `100` is the len of progress bar, we can use any dummy value here,
             // since we only show the spinner in console.
             let pb = mp.add(ProgressBar::new(100));
@@ -77,11 +55,10 @@ pub fn start_worker(
             thread::Builder::new()
                 .name(worker_name)
                 .spawn(move || {
-                    let mut worker = CuckooSimple::new(seal_tx, worker_rx);
-                    let rng = nonce_generator(nonce_range);
-                    worker.run(rng, pb);
+                    let mut worker = CuckooGpu::new(seal_tx, worker_rx);
+                    worker.run(pb);
                 })
-                .expect("Start `CuckooSimple` worker thread failed");
+                .expect("Start `CuckooGpu` worker thread failed");
             worker_tx
         })
         .collect();
@@ -90,5 +67,5 @@ pub fn start_worker(
 }
 
 pub trait Worker {
-    fn run<G: FnMut() -> u64>(&mut self, rng: G, progress_bar: ProgressBar);
+    fn run(&mut self, progress_bar: ProgressBar);
 }
