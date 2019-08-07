@@ -1,6 +1,6 @@
-# ckb-miner-avx512
+# ckb-miner-gpu
 
-An avx512 miner, can run on CPUs which supporting avx512 instruction set.
+A GPU miner, can run on Nvidia GPUs with minimal 2G video memory.
 
 ## How to use
 
@@ -9,3 +9,7 @@ An avx512 miner, can run on CPUs which supporting avx512 instruction set.
 2. copy the ckb-miner.toml to your work directory and modify it.
 
 3. run ckb-miner in your work directory.
+
+```
+./ckb-miner
+```
