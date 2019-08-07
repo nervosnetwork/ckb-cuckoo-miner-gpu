@@ -5,10 +5,11 @@ use crate::Capacity;
 use ckb_hash::new_blake2b;
 use ckb_merkle_tree::merkle_root;
 use ckb_occupied_capacity::Result as CapacityResult;
+use fnv::FnvHashSet;
 use numext_fixed_hash::H256;
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::ToOwned;
-use std::collections::HashSet;
+use std::iter::FromIterator;
 use std::ops::Deref;
 
 fn cal_transactions_root(vec: &[Transaction]) -> H256 {
@@ -92,14 +93,14 @@ impl Block {
         uncles_hash(&self.uncles)
     }
 
-    pub fn union_proposal_ids_iter(&self) -> impl Iterator<Item = &ProposalShortId> {
-        self.proposals()
-            .iter()
-            .chain(self.uncles.iter().flat_map(|u| u.proposals()))
-    }
+    pub fn union_proposal_ids(&self) -> FnvHashSet<ProposalShortId> {
+        let mut ids = FnvHashSet::from_iter(self.proposals().to_owned());
 
-    pub fn union_proposal_ids(&self) -> HashSet<ProposalShortId> {
-        self.union_proposal_ids_iter().cloned().collect()
+        for uc in &self.uncles {
+            ids.extend(uc.proposals());
+        }
+
+        ids
     }
 
     pub fn cal_witnesses_root(&self) -> H256 {

@@ -54,3 +54,5 @@ dkms.conf
 target/
 */target/
 **/Cargo.lock
+
+.vscode

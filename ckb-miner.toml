@@ -16,4 +16,5 @@ rpc_url = "http://127.0.0.1:8114/"
 block_on_submit = true
 # block template polling interval in milliseconds
 poll_interval = 1000
+# the gpu you want to use, can be 0,1,2,3,...
 gpuids     = [0]
