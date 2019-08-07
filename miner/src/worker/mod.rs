@@ -37,11 +37,11 @@ impl WorkerController {
 const PROGRESS_BAR_TEMPLATE: &str = "{prefix:.bold.dim} {spinner:.green} [{elapsed_precise}] {msg}";
 
 pub fn start_worker(
-    _threads: usize,
+    gpuids: Vec<u32>,
     seal_tx: Sender<(H256, Seal)>,
     mp: &MultiProgress,
 ) -> WorkerController {
-    let worker_txs = (0..1)
+    let worker_txs = gpuids.into_iter()
         .map(|i| {
             let worker_name = format!("CuckooGpu-Worker-{}", i);
             // `100` is the len of progress bar, we can use any dummy value here,
@@ -55,7 +55,7 @@ pub fn start_worker(
             thread::Builder::new()
                 .name(worker_name)
                 .spawn(move || {
-                    let mut worker = CuckooGpu::new(seal_tx, worker_rx);
+                    let mut worker = CuckooGpu::new(seal_tx, worker_rx, i);
                     worker.run(pb);
                 })
                 .expect("Start `CuckooGpu` worker thread failed");

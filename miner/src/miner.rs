@@ -32,7 +32,7 @@ impl Miner {
         let (seal_tx, seal_rx) = unbounded();
         let mp = MultiProgress::new();
 
-        let worker_controller = start_worker(config.threads, seal_tx.clone(), &mp);
+        let worker_controller = start_worker(config.gpuids.clone(), seal_tx.clone(), &mp);
 
         let pb = mp.add(ProgressBar::new(100));
         pb.set_style(ProgressStyle::default_bar().template("{msg:.green}"));

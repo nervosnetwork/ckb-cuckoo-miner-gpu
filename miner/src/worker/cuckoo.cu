@@ -1,4 +1,4 @@
-﻿// System includes
+﻿/// System includes
 #include <stdio.h>
 #include <assert.h>
 
@@ -12,10 +12,10 @@
 #include <stddef.h>
 #include <openssl/rand.h>
 #include "blake2b.h"
-#include <time.h>
 
 #define threadsPerBlock  (512)
 #define MaxCuckooNum (4*4096)
+#define MaxGpuNum (1024)
 #define trim (32)
 #define SolveThreadsPerBlock (128)
 #define SolveEN (128)
@@ -29,18 +29,23 @@
 #define MASK ((1 << EBIT) - 1)
 #define CN CLEN << 2
 
-uint32_t cproof[CuckooNum][CLEN] = { 0 };
-uint8_t msg[CuckooNum][32] = { 0 };
-uint8_t alive[CuckooNum][EN >> 3] = { 0 };
-uint8_t calive[CuckooNum][EN >> 3] = { 0 };
-uint64_t nonces[CuckooNum];
+struct GPU_DEVICE
+{
+	uint32_t cproof[CuckooNum][CLEN];
+	uint8_t msg[CuckooNum][32];
+	uint8_t alive[CuckooNum][EN >> 3];
+	uint8_t calive[CuckooNum][EN >> 3];
+	uint64_t nonces[CuckooNum];
 
-uint8_t  *gmsg = NULL;
-uint8_t  *gRHash = NULL;
-uint32_t *gRege = NULL;
-uint32_t *gproof = NULL;
-uint32_t *gnode = NULL;
+	uint8_t  *gmsg = NULL;
+	uint8_t  *gRHash = NULL;
+	uint32_t *gRege = NULL;
+	uint32_t *gproof = NULL;
+	uint32_t *gnode = NULL;
+};
 
+GPU_DEVICE *gpu_divices[MaxGpuNum] = {NULL};
+uint32_t gpu_divices_cnt = 0;
 
 // set siphash keys from 32 byte char array
 #define setkeys() \
@@ -64,7 +69,7 @@ uint32_t *gnode = NULL;
 	v2 ^= 0xff; \
 	sip_round(); sip_round(); sip_round(); sip_round(); \
 	hashv = (v0 ^ v1 ^ v2  ^ v3); \
-	}
+}
 
 __global__ void kill_leaf(uint8_t *gmesg, uint32_t *gRege, uint8_t *gRHash, uint32_t *gnode)
 {
@@ -73,10 +78,10 @@ __global__ void kill_leaf(uint8_t *gmesg, uint32_t *gRege, uint8_t *gRHash, uint
 	uint64_t v0, v1, v2, v3;
 	uint64_t hash;
 	uint64_t st, ed;
-	uint32_t tmp, tw_bit, py,py2;
-	uint32_t i,j;
+	uint32_t tmp, tw_bit, py, py2;
+	uint32_t i, j;
 	uint32_t u;
-	uint32_t uorv,edgeidx;
+	uint32_t uorv, edgeidx;
 
 	uint32_t block_tid = id % threadsPerBlock;
 	uint32_t block_id = id / threadsPerBlock;
@@ -92,7 +97,7 @@ __global__ void kill_leaf(uint8_t *gmesg, uint32_t *gRege, uint8_t *gRHash, uint
 	__shared__ uint32_t RHash[SolveEN][2];
 	__shared__ uint32_t RegeSP;
 
-	if (block_tid == 0)atomicAnd(&RegeSP,0);
+	if (block_tid == 0)atomicAnd(&RegeSP, 0);
 
 	setkeys();
 	st = block_tid*block_ENrange; ed = (block_tid + 1)*block_ENrange;
@@ -106,14 +111,14 @@ __global__ void kill_leaf(uint8_t *gmesg, uint32_t *gRege, uint8_t *gRHash, uint
 		node32[i << 1] = u;
 		siphash24((i << 1) + 1, hash);
 		u = (hash & MASK);
-		node32[(i << 1) +1] = u;
+		node32[(i << 1) + 1] = u;
 	}
 	__syncthreads();
 
 	for (j = 0; j < trim; j++)
 	{
 		uorv = 0;
-		memset(node + block_tid*block_AliveNode, 0, block_AliveNode*sizeof(uint32_t));__syncthreads();
+		memset(node + block_tid*block_AliveNode, 0, block_AliveNode*sizeof(uint32_t)); __syncthreads();
 
 		for (i = st; i < ed; i++)
 		{
@@ -130,7 +135,7 @@ __global__ void kill_leaf(uint8_t *gmesg, uint32_t *gRege, uint8_t *gRHash, uint
 		for (i = st; i < ed; i++)
 		{
 			if (!((alive_ege[i >> 3] >> (i & 7)) & 1))
-			{		
+			{
 				u = node32[(i << 1) + uorv];
 				tmp = node[u >> 4];
 				py = ((u << 1) & 31);
@@ -183,7 +188,7 @@ __global__ void kill_leaf(uint8_t *gmesg, uint32_t *gRege, uint8_t *gRHash, uint
 		{
 			edgeidx = atomicInc(&RegeSP, 126);
 			gRege[SolveEN * block_id + edgeidx] = i;
-			u = node32[(i << 1) + 0]<<1;
+			u = node32[(i << 1) + 0] << 1;
 			RHash[edgeidx][0] = u;
 			u = node32[(i << 1) + 1] << 1 + 1;
 			RHash[edgeidx][1] = u;
@@ -191,17 +196,17 @@ __global__ void kill_leaf(uint8_t *gmesg, uint32_t *gRege, uint8_t *gRHash, uint
 	}
 	__syncthreads();
 
-	if (block_tid<=1)
+	if (block_tid <= 1)
 	{
 		tmp = 0;
 		edgeidx = RegeSP;
-		for (i = 0; i < edgeidx;i++)
+		for (i = 0; i < edgeidx; i++)
 		{
 			py = RHash[i][block_tid];
 			if (py == 0xffffffff)continue;
 			RHash[i][block_tid] = 0xffffffff;
 			gRHash[(SolveEN << 1) *block_id + (i << 1) + block_tid] = (tmp << 1) + block_tid;
-			for (j = i+1; j < edgeidx; j++)
+			for (j = i + 1; j < edgeidx; j++)
 			{
 				py2 = RHash[j][block_tid];
 				if (py2 == py)
@@ -220,7 +225,7 @@ __global__ void kill_leaf(uint8_t *gmesg, uint32_t *gRege, uint8_t *gRHash, uint
 __global__ void solve128X_127EN(uint32_t *gRege, uint8_t *gRHash, uint32_t *gproof)
 {
 	unsigned int id = blockDim.x * blockIdx.x + threadIdx.x;
-	uint32_t i,tmp;
+	uint32_t i, tmp;
 	uint8_t u, v;
 
 	uint32_t block_tid = id % SolveThreadsPerBlock;
@@ -229,7 +234,7 @@ __global__ void solve128X_127EN(uint32_t *gRege, uint8_t *gRHash, uint32_t *gpro
 	uint32_t *proof = gproof + id * CLEN;
 
 	__shared__ uint32_t path[SolveThreadsPerBlock][CLEN];
-	__shared__ uint8_t graph[SolveThreadsPerBlock][SolveEN<<1];
+	__shared__ uint8_t graph[SolveThreadsPerBlock][SolveEN << 1];
 
 	uint8_t pre;
 	uint8_t cur;
@@ -244,8 +249,8 @@ __global__ void solve128X_127EN(uint32_t *gRege, uint8_t *gRHash, uint32_t *gpro
 		{
 			break;
 		}
-		u = RHash[i<<1];
-		v = RHash[(i << 1)+1];
+		u = RHash[i << 1];
+		v = RHash[(i << 1) + 1];
 		__syncthreads();
 		pre = 0xff;
 		cur = u;
@@ -298,11 +303,11 @@ __global__ void solve128X_127EN(uint32_t *gRege, uint8_t *gRHash, uint32_t *gpro
 			}
 			path[block_tid][k] = Rege[i];
 
-			for (j = 0; j < CLEN-1; j++) // sort
+			for (j = 0; j < CLEN - 1; j++) // sort
 			{
-				for (k = 0; k < CLEN-j-1; k++)
+				for (k = 0; k < CLEN - j - 1; k++)
 				{
-					if (path[block_tid][k]>path[block_tid][k+1])
+					if (path[block_tid][k]>path[block_tid][k + 1])
 					{
 						tmp = path[block_tid][k];
 						path[block_tid][k] = path[block_tid][k + 1];
@@ -317,76 +322,112 @@ __global__ void solve128X_127EN(uint32_t *gRege, uint8_t *gRHash, uint32_t *gpro
 	__syncthreads();
 }
 
-int gpu_cuckoo()
+int gpu_cuckoo(uint32_t gpuid)
 {
-	if (CuckooNum > MaxCuckooNum) { 
+	if (CuckooNum > MaxCuckooNum) {
 		printf("CuckooNum out of bound!!!\n");
-		return 0; 
+		return 0;
 	}
 
 	if (CuckooNum % SolveThreadsPerBlock != 0) {
 		printf("CuckooNum must be a multiple of SolveThreadsPerBlock = %5d\n", SolveThreadsPerBlock);
 		return 0;
 	}
-	
+
 	//alloc once
-	if (gmsg == NULL) {
-		if (cudaMalloc((void **)&gmsg, CuckooNum * 32 * sizeof(uint8_t)) != cudaSuccess) {
-			printf("gpwd cudaMalloc error\n");
+	if (gpu_divices[gpuid]->gmsg == NULL) {
+		if (cudaMalloc((void **)&gpu_divices[gpuid]->gmsg, CuckooNum * 32 * sizeof(uint8_t)) != cudaSuccess) {
+			printf("gmsg cudaMalloc error\n");
 			return 0;
 		}
 	}
 
-	if (gRege == NULL) {
-		if (cudaMalloc((void **)&gRege, CuckooNum * 128 * sizeof(uint32_t)) != cudaSuccess) {
-			printf("gpwd cudaMalloc error\n");
+	if (gpu_divices[gpuid]->gRege == NULL) {
+		if (cudaMalloc((void **)&gpu_divices[gpuid]->gRege, CuckooNum * 128 * sizeof(uint32_t)) != cudaSuccess) {
+			printf("gRege cudaMalloc error\n");
 			return 0;
 		}
 	}
 
-	if (gRHash == NULL) {
-		if (cudaMalloc((void **)&gRHash, CuckooNum * 2 * 128 * sizeof(uint8_t)) != cudaSuccess) {
-			printf("gpwd cudaMalloc error\n");
+	if (gpu_divices[gpuid]->gRHash == NULL) {
+		if (cudaMalloc((void **)&gpu_divices[gpuid]->gRHash, CuckooNum * 2 * 128 * sizeof(uint8_t)) != cudaSuccess) {
+			printf("gRHash cudaMalloc error\n");
 			return 0;
 		}
 	}
 
-	if (gproof == NULL) {
-		if (cudaMalloc((void **)&gproof, CuckooNum * CLEN * sizeof(uint32_t)) != cudaSuccess) {
-			printf("gpwd cudaMalloc error\n");
+	if (gpu_divices[gpuid]->gproof == NULL) {
+		if (cudaMalloc((void **)&gpu_divices[gpuid]->gproof, CuckooNum * CLEN * sizeof(uint32_t)) != cudaSuccess) {
+			printf("gproof cudaMalloc error\n");
 			return 0;
 		}
 	}
 
-	if (gnode == NULL) {
-		if (cudaMalloc((void **)&gnode, CuckooNum * M * sizeof(uint32_t)) != cudaSuccess) {
-			printf("gpwd cudaMalloc error\n");
+	if (gpu_divices[gpuid]->gnode == NULL) {
+		if (cudaMalloc((void **)&gpu_divices[gpuid]->gnode, CuckooNum * M * sizeof(uint32_t)) != cudaSuccess) {
+			printf("gnode cudaMalloc error\n");
 			return 0;
 		}
 	}
 
-	if (cudaMemcpy(gmsg, msg, CuckooNum * 32 * sizeof(uint8_t), cudaMemcpyHostToDevice) != cudaSuccess) {
+	if (cudaMemcpy(gpu_divices[gpuid]->gmsg, gpu_divices[gpuid]->msg, CuckooNum * 32 * sizeof(uint8_t), cudaMemcpyHostToDevice) != cudaSuccess) {
 		printf("copy memory error\n");
 		return 0;
 	}
-	
-	kill_leaf << <CuckooNum, threadsPerBlock >> >(gmsg, gRege, gRHash, gnode);
+
+	kill_leaf << <CuckooNum, threadsPerBlock >> >(gpu_divices[gpuid]->gmsg, gpu_divices[gpuid]->gRege, gpu_divices[gpuid]->gRHash, gpu_divices[gpuid]->gnode);
 	cudaDeviceSynchronize();
 
-	solve128X_127EN << <CuckooNum / SolveThreadsPerBlock, SolveThreadsPerBlock >> >(gRege, gRHash, gproof);
+	solve128X_127EN << <CuckooNum / SolveThreadsPerBlock, SolveThreadsPerBlock >> >(gpu_divices[gpuid]->gRege, gpu_divices[gpuid]->gRHash, gpu_divices[gpuid]->gproof);
 	cudaDeviceSynchronize();
-	
-	if (cudaMemcpy(cproof, gproof, CuckooNum * CLEN * sizeof(uint32_t), cudaMemcpyDeviceToHost) != cudaSuccess) {
+
+	if (cudaMemcpy(gpu_divices[gpuid]->cproof, gpu_divices[gpuid]->gproof, CuckooNum * CLEN * sizeof(uint32_t), cudaMemcpyDeviceToHost) != cudaSuccess) {
 		printf("copy memory error\n");
 		return 0;
 	}
-	
-
 	return CuckooNum;
 }
 
+GPU_DEVICE* New_GPU_DEVICE()
+{
+	GPU_DEVICE* p = NULL;
+	p = (GPU_DEVICE*)malloc(sizeof(GPU_DEVICE));
+	if (p != NULL)
+	{
+		p->gmsg = NULL;
+		p->gRHash = NULL;
+		p->gRege = NULL;
+		p->gproof = NULL;
+		p->gnode = NULL;
+	}
+	return p;
+}
+void GPU_Count()
+{
+	int num;
+	cudaDeviceProp prop;
+	cudaGetDeviceCount(&num);
+	printf("deviceCount := %d\n", num);
+	gpu_divices_cnt = 0;
+	for (int i = 0; i<num; i++)
+	{
+
+		cudaGetDeviceProperties(&prop, i);
+		printf("name: %s\n", prop.name);
+		printf("totalGlobalMem: %luG\n", prop.totalGlobalMem / 1024 / 1024 / 1024);
+		printf("multiProcessorCount: %d\n", prop.multiProcessorCount);
+		printf("maxThreadsPerBlock: %d\n", prop.maxThreadsPerBlock);
+		printf("major:%d,minor: %d\n", prop.major, prop.minor);
+		gpu_divices_cnt++;
+	}
+}
+
 extern "C" {
-	int c_solve(uint32_t *prof, uint64_t *nonc, const uint8_t *hash, const uint8_t *target) {
+	int c_solve(uint32_t *prof, uint64_t *nonc, const uint8_t *hash, const uint8_t *target, uint32_t gpuid) {
+		while (!gpu_divices[gpuid]) {
+			gpu_divices[gpuid] = New_GPU_DEVICE();
+		}
+
 		uint8_t pmesg[CN];
 		uint8_t thash[32];
 		blake2b_state S;
@@ -398,24 +439,25 @@ extern "C" {
 			RAND_bytes(pmesg, 8);
 			blake2b_state tmp = S;
 			blake2b_update(&tmp, pmesg, 40);
-			blake2b_final(&tmp, msg[i], 32);
-			nonces[i] = le64toh(((uint64_t *)pmesg)[0]);
+			blake2b_final(&tmp, gpu_divices[gpuid]->msg[i], 32);
+			gpu_divices[gpuid]->nonces[i] = le64toh(((uint64_t *)pmesg)[0]);
 		}
-
-		int ret = gpu_cuckoo();
+		
+		cudaSetDevice(gpuid);
+		int ret = gpu_cuckoo(gpuid);
 
 		for(int i=0; i< ret; ++i) {
-			if (cproof[i][0] != 0xffffffff)
+			if (gpu_divices[gpuid]->cproof[i][0] != 0xffffffff)
 			{
-				memcpy(pmesg, cproof[i], CN);
+				memcpy(pmesg, gpu_divices[gpuid]->cproof[i], CN);
 				blake2b_state tmp = S;
 				blake2b_update(&tmp, pmesg, CN);
 				blake2b_final(&tmp, thash, 32);
 
 				for(int j=0; j<32; ++j) {
 					if(thash[j] < target[j]) {
-						memcpy(prof, cproof[i], CN);
-						*nonc = nonces[i];
+						memcpy(prof, gpu_divices[gpuid]->cproof[i], CN);
+						*nonc = gpu_divices[gpuid]->nonces[i];
 						prof[CLEN] = 1;
 						return ret;
 					} else if(thash[j] > target[j]) {

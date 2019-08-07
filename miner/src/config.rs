@@ -5,5 +5,5 @@ pub struct MinerConfig {
     pub rpc_url: String,
     pub poll_interval: u64,
     pub block_on_submit: bool,
-    pub threads: usize,
+    pub gpuids: Vec<u32>,
 }

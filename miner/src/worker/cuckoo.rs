@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 const CYCLE_LEN: usize = 12;
 
 extern "C" {
-    pub fn c_solve(output: *mut u32, nonce: *mut u64, input: *const u8, target: *const u8) -> u32;
+    pub fn c_solve(output: *mut u32, nonce: *mut u64, input: *const u8, target: *const u8, gpuid: u32) -> u32;
 }
 
 pub struct CuckooGpu {
@@ -20,16 +20,18 @@ pub struct CuckooGpu {
     seal_tx: Sender<(H256, Seal)>,
     worker_rx: Receiver<WorkerMessage>,
     seal_candidates_found: u64,
+    gpuid: u32,
 }
 
 impl CuckooGpu {
-    pub fn new(seal_tx: Sender<(H256, Seal)>, worker_rx: Receiver<WorkerMessage>) -> Self {
+    pub fn new(seal_tx: Sender<(H256, Seal)>, worker_rx: Receiver<WorkerMessage>, gpuid: u32) -> Self {
         Self {
             start: true,
             pow_info: None,
             seal_candidates_found: 0,
             seal_tx,
             worker_rx,
+            gpuid,
         }
     }
 
@@ -59,6 +61,7 @@ impl CuckooGpu {
                 &mut nonce,
                 pow_hash[..].as_ptr(),
                 target[..].as_ptr(),
+                self.gpuid
             );
             if ns > 0 && output[CYCLE_LEN] == 1 {
                 let mut proof_u8 = vec![0u8; CYCLE_LEN << 2];
