@@ -81,7 +81,7 @@ impl From<CoreScript> for Script {
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash, Debug)]
 pub struct CellOutput {
     pub capacity: Capacity,
-    pub data: JsonBytes,
+    pub data_hash: H256,
     pub lock: Script,
     #[serde(rename = "type")]
     pub type_: Option<Script>,
@@ -89,10 +89,10 @@ pub struct CellOutput {
 
 impl From<CoreCellOutput> for CellOutput {
     fn from(core: CoreCellOutput) -> CellOutput {
-        let (capacity, data, lock, type_) = core.destruct();
+        let (capacity, data_hash, lock, type_) = core.destruct();
         CellOutput {
             capacity: Capacity(capacity),
-            data: JsonBytes::from_bytes(data),
+            data_hash,
             lock: lock.into(),
             type_: type_.map(Into::into),
         }
@@ -103,7 +103,7 @@ impl From<CellOutput> for CoreCellOutput {
     fn from(json: CellOutput) -> Self {
         let CellOutput {
             capacity,
-            data,
+            data_hash,
             lock,
             type_,
         } = json;
@@ -113,7 +113,7 @@ impl From<CellOutput> for CoreCellOutput {
             None => None,
         };
 
-        CoreCellOutput::new(capacity.0, data.into_bytes(), lock.into(), type_)
+        CoreCellOutput::new(capacity.0, data_hash, lock.into(), type_)
     }
 }
 
@@ -220,6 +220,7 @@ pub struct Transaction {
     pub deps: Vec<OutPoint>,
     pub inputs: Vec<CellInput>,
     pub outputs: Vec<CellOutput>,
+    pub outputs_data: Vec<JsonBytes>,
     pub witnesses: Vec<Witness>,
 }
 
@@ -237,6 +238,12 @@ impl<'a> From<&'a CoreTransaction> for Transaction {
             deps: core.deps().iter().cloned().map(Into::into).collect(),
             inputs: core.inputs().iter().cloned().map(Into::into).collect(),
             outputs: core.outputs().iter().cloned().map(Into::into).collect(),
+            outputs_data: core
+                .outputs_data()
+                .iter()
+                .cloned()
+                .map(JsonBytes::from_bytes)
+                .collect(),
             witnesses: core.witnesses().iter().map(Into::into).collect(),
         }
     }
@@ -258,6 +265,7 @@ impl From<Transaction> for CoreTransaction {
             deps,
             inputs,
             outputs,
+            outputs_data,
             witnesses,
         } = json;
 
@@ -266,6 +274,7 @@ impl From<Transaction> for CoreTransaction {
             .deps(deps)
             .inputs(inputs)
             .outputs(outputs)
+            .outputs_data(outputs_data.into_iter().map(JsonBytes::into_bytes))
             .witnesses(witnesses)
             .build()
     }
@@ -534,7 +543,7 @@ mod tests {
     fn mock_cell_output(data: Bytes, arg: Bytes) -> CoreCellOutput {
         CoreCellOutput::new(
             Capacity::zero(),
-            data,
+            CoreCellOutput::calculate_data_hash(&data),
             CoreScript::default(),
             Some(mock_script(arg)),
         )
@@ -548,7 +557,8 @@ mod tests {
         TransactionBuilder::default()
             .deps(vec![CoreOutPoint::default()])
             .inputs(vec![mock_cell_input()])
-            .outputs(vec![mock_cell_output(data, arg.clone())])
+            .outputs(vec![mock_cell_output(data.clone(), arg.clone())])
+            .outputs_data(vec![data])
             .witness(vec![arg])
             .build()
     }
