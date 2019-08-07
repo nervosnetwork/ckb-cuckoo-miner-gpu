@@ -186,7 +186,7 @@ __global__ void kill_leaf(uint8_t *gmesg, uint32_t *gRege, uint8_t *gRHash, uint
 	{
 		if (!((alive_ege[i >> 3] >> (i & 7)) & 1))
 		{
-			edgeidx = atomicInc(&RegeSP, 126);
+			edgeidx = atomicInc(&RegeSP, 0xffffffff)%126;
 			gRege[SolveEN * block_id + edgeidx] = i;
 			u = node32[(i << 1) + 0] << 1;
 			RHash[edgeidx][0] = u;
@@ -199,7 +199,8 @@ __global__ void kill_leaf(uint8_t *gmesg, uint32_t *gRege, uint8_t *gRHash, uint
 	if (block_tid <= 1)
 	{
 		tmp = 0;
-		edgeidx = RegeSP;
+		if (RegeSP > 126)edgeidx = 126;
+		else	edgeidx = RegeSP;
 		for (i = 0; i < edgeidx; i++)
 		{
 			py = RHash[i][block_tid];
