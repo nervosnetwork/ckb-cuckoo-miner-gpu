@@ -19,7 +19,7 @@
 #define trim (32)
 #define SolveThreadsPerBlock (128)
 #define SolveEN (128)
-#define CuckooNum (4*4096)
+#define CuckooNum (2*4096)
 
 #define rotl(x, b) (((x) << (b)) | ((x) >> (64 - (b))))
 #define EBIT 15
