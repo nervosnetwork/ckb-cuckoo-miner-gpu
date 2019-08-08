@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 const CYCLE_LEN: usize = 12;
 
+#[link(name="cuckoo", kind="static")]
 extern "C" {
     pub fn c_solve(output: *mut u32, nonce: *mut u64, input: *const u8, target: *const u8, gpuid: u32) -> u32;
 }

@@ -1,6 +1,8 @@
 ﻿/// System includes
 #include <stdio.h>
 #include <assert.h>
+#include <windows.h>
+#include <Wincrypt.h>
 
 // CUDA runtime
 #include <cuda_runtime.h>
@@ -10,7 +12,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stddef.h>
-#include <openssl/rand.h>
+// #include <openssl/rand.h>
 #include "blake2b.h"
 
 #define threadsPerBlock  (512)
@@ -432,6 +434,9 @@ void GPU_Count()
 
 extern "C" {
     int c_solve(uint32_t *prof, uint64_t *nonc, const uint8_t *hash, const uint8_t *target, uint32_t gpuid) {
+		HCRYPTPROV Rnd;
+		uint64_t first;
+
         while (!gpu_divices[gpuid]) {
             gpu_divices[gpuid] = New_GPU_DEVICE();
         }
@@ -441,14 +446,16 @@ extern "C" {
         blake2b_state S;
         
         b2setup(&S);
-        memcpy(pmesg+8, hash, 32);
+		memcpy(pmesg+8, hash, 32);
+		CryptGenRandom(Rnd, 8, pmesg);
 
-        for(int i=0; i< CuckooNum; ++i) {
-            RAND_bytes(pmesg, 8);
+        for(uint64_t i=0; i< CuckooNum; ++i) {
+			// RAND_bytes(pmesg, 8);
+			((uint64_t *)pmesg)[0] = ((uint64_t *)pmesg)[0] ^ i;
             blake2b_state tmp = S;
             blake2b_update(&tmp, pmesg, 40);
             blake2b_final(&tmp, gpu_divices[gpuid]->msg[i], 32);
-            gpu_divices[gpuid]->nonces[i] = le64toh(((uint64_t *)pmesg)[0]);
+            gpu_divices[gpuid]->nonces[i] = (((uint64_t *)pmesg)[0]);
         }
         
         cudaSetDevice(gpuid);
